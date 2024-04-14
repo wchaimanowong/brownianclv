@@ -26,7 +26,7 @@ run_demo <- function() {
 
     start_date <- id_Data$day[1]
     id_Data$day <- id_Data$day - start_date
-    TTT[i] <- time_period - start_date
+    TTT[i] <- train_period - start_date
     training_Data[[i]] <- c(length(id_Data[id_Data$day < TTT[i],]$day), id_Data[id_Data$day < TTT[i],]$day, TTT[i])
 
     test_period_txns[i] <- length(unique(id_Data[id_Data$day >= TTT[i],]$day))
@@ -373,6 +373,8 @@ Evolve_FDM <- function(p0, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps) 
   dead_L <- 0
   dead_H <- 0
 
+  final_dead_L <- 0
+
   num_v_steps <- length(p0)
   p1 <- rep(0,num_v_steps)
   for (n in 1:num_t_steps) {
@@ -388,13 +390,21 @@ Evolve_FDM <- function(p0, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps) 
 
     p0 <- p1
   }
-  return_list <- list(p1, dead_L, dead_H)
+  final_dead_L <- coeff*p0[2]
+
+  return_list <- list(p1, dead_L, dead_H, final_dead_L)
   return(return_list)
 }
 
 L_PDE_FDM <- function(X, v, uv, lambda, sigma, dt, dv, num_v_steps) {
+  x <- X[1]
   TT <- as.integer(tail(X, 1)/dt)
-  tt <- unique(as.integer(X[2:(length(X)-1)]/dt))
+  if (length(X) > x+2) {
+    tau <- as.integer(tail(X,2)[1]/dt)
+  } else {
+    tau <- -1
+  }
+  tt <- unique(as.integer(X[2:(x+1)]/dt))
   tt[1] <- -1 # For technical convenience (we really want to start from the end of the zeroth day).
 
   p <- Initialize_FDM(v, uv, lambda, sigma, dv, num_v_steps)
@@ -411,16 +421,33 @@ L_PDE_FDM <- function(X, v, uv, lambda, sigma, dt, dv, num_v_steps) {
     if (i < length(tt)) {
       num_t_steps <- tt[i+1] - tt[i]
       p <- Evolve_FDM(p, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)[[1]]
-      p <- lambda*dt*np_mask*p
+      p <- lambda*np_mask*p
     } else {
-      num_t_steps <- TT - tt[i]
-      returned_list <- Evolve_FDM(p, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
-      p <- returned_list[[1]]
-      dead_L <- returned_list[[2]]
-      dead_H <- returned_list[[3]]
+      if ((tau >= tt[i]) && (tau <= TT)) {
+        num_t_steps <- tau - tt[i]
+        returned_list <- Evolve_FDM(p, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        p <- returned_list[[1]]
+        final_dead_L <- returned_list[[4]]
+
+        val <- final_dead_L*dv
+      } else if(tau > TT) {
+        num_t_steps <- TT - tt[i]
+        returned_list <- Evolve_FDM(p, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        p <- returned_list[[1]]
+        dead_H <- returned_list[[3]]
+
+        val <- (sum(p) + dead_H)*dv
+      } else {
+        num_t_steps <- TT - tt[i]
+        returned_list <- Evolve_FDM(p, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        p <- returned_list[[1]]
+        dead_L <- returned_list[[2]]
+        dead_H <- returned_list[[3]]
+
+        val <- (sum(p) + dead_L + dead_H)*dv
+      }
     }
   }
-  val <- (sum(p) + dead_L + dead_H)*dv
 
   return_list <- list(val, p)
   return(return_list)
@@ -485,13 +512,21 @@ Evolve_FEM <- function(U0, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps) 
     dead_H <- dead_H + (1/2)*(sigma^2)*dt*(U[nrow(U)-1,1] - U[nrow(U),1])/dv
   }
 
-  return_list <- list(U, dead_L, dead_H)
+  final_dead_L <- (1/2)*(sigma^2)*dt*(U[2,1] - U[1,1])/dv
+
+  return_list <- list(U, dead_L, dead_H, final_dead_L)
   return(return_list)
 }
 
 L_PDE_FEM <- function(X, v, uv, lambda, sigma, dt, dv, num_v_steps) {
+  x <- X[1]
   TT <- as.integer(tail(X, 1)/dt)
-  tt <- unique(as.integer(X[2:(length(X)-1)]/dt))
+  if (length(X) > x+2) {
+    tau <- as.integer(tail(X,2)[1]/dt)
+  } else {
+    tau <- -1
+  }
+  tt <- unique(as.integer(X[2:(x+1)]/dt))
   tt[1] <- -1 # For technical convenience (we really want to start from the end of the zeroth day).
 
   U <- Initialize_FEM(v, uv, lambda, sigma, dv, num_v_steps)
@@ -508,17 +543,33 @@ L_PDE_FEM <- function(X, v, uv, lambda, sigma, dt, dv, num_v_steps) {
     if (i < length(tt)) {
       num_t_steps <- tt[i+1] - tt[i]
       U <- Evolve_FEM(U, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)[[1]]
-      U <- lambda*dt*np_mask*U
+      U <- lambda*np_mask*U
     } else {
-      num_t_steps <- TT - tt[i]
-      returned_list <- Evolve_FEM(U, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
-      U <- returned_list[[1]]
-      dead_L <- returned_list[[2]]
-      dead_H <- returned_list[[3]]
+      if ((tau >= tt[i]) && (tau <= TT)) {
+        num_t_steps <- tau - tt[i]
+        returned_list <- Evolve_FEM(U, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        U <- returned_list[[1]]
+        final_dead_L <- returned_list[[4]]
+
+        val <- final_dead_L
+      } else if(tau > TT) {
+        num_t_steps <- TT - tt[i]
+        returned_list <- Evolve_FEM(U, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        U <- returned_list[[1]]
+        dead_H <- returned_list[[3]]
+
+        val <- sum(U)*dv + dead_H
+      } else {
+        num_t_steps <- TT - tt[i]
+        returned_list <- Evolve_FEM(U, num_t_steps, uv, lambda, sigma, dt, dv, num_v_steps)
+        U <- returned_list[[1]]
+        dead_L <- returned_list[[2]]
+        dead_H <- returned_list[[3]]
+
+        val <- sum(U)*dv + dead_L + dead_H
+      }
     }
   }
-
-  val <- sum(U)*dv + dead_L + dead_H
 
   return_list <- list(val, U)
 
@@ -567,13 +618,13 @@ UV_fn <- function(uc, lambda, rr, sigma) {
 
 c_From_uc <- function(uc, rr, sigma) {
   val_ <- sigma/(sqrt(2*rr))
-  val <- var_*exp(uc/var_)
+  val <- val_*exp(uc/val_)
   return(val)
 }
 
 uc_From_c <- function(c, rr, sigma) {
   val_ <- sigma/(sqrt(2*rr))
-  val <- var_*log(c/var_)
+  val <- val_*log(c/val_)
   return(val)
 }
 
@@ -587,8 +638,8 @@ file_sample_v_lambda <- 'sample_v_lambda.csv'
 # rr      = discounting factor (default=1).
 # dt      = time step (default=1)
 # Replicate = Option to either simulate new set of Brownian motions for every new id or just copy the same simulation across for all consumers
-# training_Data = list of (x,t1,t2,...,tx,T) for each individual customers.
-# method  = Finite Element (FEM) or Finite Difference (FDM).
+# training_Data = either list of (x,t1,t2,...,tx,T), or (x,t1,t2,...,tx,T,Tm) for each individual customers.
+#                 where Tm is the 'membership' period (observation information tracking period). If Tm is not given, then we assume information tracking is not observable).
 #
 
 Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896, r=0.3922,alpha=19.8473),
@@ -634,7 +685,7 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
     return(-LL)
   }
 
-  fit <- bbmle::mle2(nLL_PDE_het, start=C0, lower=c(-5, -10, 0.1, 0.1), upper=c(3,0,2,50))
+  fit <- bbmle::mle2(nLL_PDE_het, start=C0, lower=c(-5, -10, 1e-100, 0.1), upper=c(3,0,2,50))
 
   C[3] <- c_From_uc(C[3], rr, sigma)
   C <- as.numeric(fit@coef)
@@ -708,7 +759,7 @@ Estimate_Parameters <- function(training_Data, C0=list(v0=1.5,uc=-3, r=0.1,alpha
 ################################################################################
 
 Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, rr=1, dt=1, Replicate=TRUE,
-                                num_sample_points=200, min_sample_v=0, max_sample_v=15, min_sample_lambda=0, max_sample_lambda=1, Use_Stored_Sampled_Points) {
+                            num_sample_points=200, min_sample_v=0, max_sample_v=15, min_sample_lambda=0, max_sample_lambda=1, Use_Stored_Sampled_Points) {
 
   returned_df <- Prepare_Simulation(training_Data, NN, sigma, rr, dt, Replicate, testing_period)
 
@@ -802,3 +853,11 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
 }
 
 
+training_Data_ = list()
+for (i in 1:num_ids) {
+  x <- training_Data[[i]][1]
+  TT <- tail(training_Data[[i]],1)
+  tx <- tail(training_Data[[i]],2)[1]
+  tau <- tx + 2*runif(1)*(TT-tx)
+  training_Data_[[i]] <- c(training_Data[[i]][1:(x+1)], tau, TT)
+}
