@@ -646,6 +646,7 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
                                     sigma=1, rr=1, dt=1/7, dv=1, max_v=100,
                                     num_sample_points=100, min_sample_lambda=0, max_sample_lambda=1, method="FEM") {
 
+  num_ids <- length(training_Data)
   num_v_steps <- as.integer(max_v/dv)
   sample_lambda <- runif(num_sample_points, min=min_sample_lambda, max=max_sample_lambda)
 
@@ -671,12 +672,24 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
         stop("Unknown method specified.")
       }
     }
-    P_vec <- P_vec*N1
-    if (sum(P_vec) > 0) {
-      v_het_vec <- v_het_vec/sum(P_vec)
-    }
 
-    LL <- sum(log(v_het_vec + epsilon))
+    P_vec <- P_vec*N1
+
+    tryCatch(
+      {
+        if (sum(P_vec) > 0) {
+          v_het_vec <- v_het_vec/sum(P_vec)
+        }
+        LL <- sum(log(v_het_vec + epsilon))
+        if (is.nan(LL)) {
+          LL <- num_ids*log(epsilon)
+        }
+      },
+      error = function(e) {
+        LL <- num_ids*log(epsilon)
+      }
+    )
+
     if (count%%1==0){
       dptm <- proc.time() - ptm
       print(paste("LL = ", as.character(LL), ", theta = ", paste(c(v0, uc, r, alpha), collapse=", "), ', time elapsed = ', as.integer(dptm[[3]]/60)))
@@ -700,14 +713,14 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
 # rr      = discounting factor (default=1).
 # dt      = time step (default=1)
 # Replicate = Option to either simulate new set of Brownian motions for every new id or just copy the same simulation across for all consumers
-# training_Data = either list of (x,t1,t2,...,tx,T), or (x,t1,t2,...,tx,T,Tm) for each individual customers.
-#                 where Tm is the 'membership' period (observation information tracking period). If Tm is not given, then we assume information tracking is not observable).
+# training_Data = list of (x,t1,t2,...,tx,T). Currently, the version of this method for membership datasets has not been implemented.
 #
 
 Estimate_Parameters <- function(training_Data, C0=list(v0=1.5,uc=-3, r=0.1,alpha=20),
                                 NN=100, sigma=1, rr=1, dt=1, Replicate=TRUE,
                                 num_sample_points=200, min_sample_v=0, max_sample_v=15, min_sample_lambda=0, max_sample_lambda=1) {
 
+  num_ids <- length(training_Data)
   testing_period <- 0
   returned_df <- Prepare_Simulation(training_Data, NN, sigma, rr, dt, Replicate, testing_period)
 
@@ -733,13 +746,16 @@ Estimate_Parameters <- function(training_Data, C0=list(v0=1.5,uc=-3, r=0.1,alpha
         if (sum(P_vec) > 0) {
           v_het_vec <- v_het_vec/sum(P_vec)
         }
+        LL <- sum(log(v_het_vec + epsilon))
+        if (is.nan(LL)) {
+          LL <- num_ids*log(epsilon)
+        }
       },
       error = function(e) {
-        v_het_vec <- rep(0, length(training_Data))
+        LL <- num_ids*log(epsilon)
       }
     )
 
-    LL <- sum(log(v_het_vec + epsilon))
     if (count%%1==0){
       dptm <- proc.time() - ptm
       print(paste("LL = ", as.character(LL), ", theta = ", paste(c(v0, uc, r, alpha), collapse=", "), ', time elapsed = ', as.integer(dptm[[3]]/60)))
@@ -858,6 +874,10 @@ for (i in 1:num_ids) {
   x <- training_Data[[i]][1]
   TT <- tail(training_Data[[i]],1)
   tx <- tail(training_Data[[i]],2)[1]
-  tau <- tx + 2*runif(1)*(TT-tx)
+  if (test_period_txns[i] == 0) {
+    tau <- tx + 2*runif(1)*(TT-tx)
+  } else {
+    tau <- TT + 1
+  }
   training_Data_[[i]] <- c(training_Data[[i]][1:(x+1)], tau, TT)
 }
