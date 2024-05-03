@@ -638,11 +638,12 @@ file_sample_v_lambda <- 'sample_v_lambda.csv'
 # rr      = discounting factor (default=1).
 # dt      = time step (default=1)
 # Replicate = Option to either simulate new set of Brownian motions for every new id or just copy the same simulation across for all consumers
-# training_Data = either list of (x,t1,t2,...,tx,T), or (x,t1,t2,...,tx,T,Tm) for each individual customers.
+# training_Data = either list of (x,t1,t2,...,tx,T), or (x,t1,t2,...,tx,Tm,T) for each individual customers.
 #                 where Tm is the 'membership' period (observation information tracking period). If Tm is not given, then we assume information tracking is not observable).
 #
 
 Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896, r=0.3922,alpha=19.8473),
+                                    Clow=c(-5, -10, 1e-100, 0.1), Chigh=c(3,0,2,50),
                                     sigma=1, rr=1, dt=1/7, dv=1, max_v=100,
                                     num_sample_points=100, min_sample_lambda=0, max_sample_lambda=1, method="FEM") {
 
@@ -652,31 +653,32 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
 
   ptm <- proc.time()
 
-  epsilon <- 1e-10 # Regularization parameter.
+  epsilon <- 1e-100 # Regularization parameter.
   count <- 0
 
   nLL_PDE_het <- function(v0, uc, r, alpha) {
-    v_het_vec <- rep(0, num_ids)
-    P_vec <- rep(0, num_sample_points)
-    N1 <- rep(0, num_sample_points)
-    for (i in 1:num_sample_points) {
-      uv <- UV_fn(uc, sample_lambda[i], rr, sigma)
-      P_vec[i] <- P_lambda(sample_lambda[i], r, alpha)
-      if (method == "FEM") {
-        v_het_vec <- v_het_vec + L_PDE_FEM_vec(training_Data, v0, uv, sample_lambda[i], sigma, dt, dv, num_v_steps)*P_vec[i]
-        N1[i] <- sum(Initialize_FEM(v0, uv, sample_lambda[i], sigma, dv, num_v_steps))*dv
-      } else if (method == "FDM") {
-        v_het_vec <- v_het_vec + L_PDE_FDM_vec(training_Data, v0, uv, sample_lambda[i], sigma, dt, dv, num_v_steps)*P_vec[i]
-        N1[i] <- sum(Initialize_FDM(v0, uv, sample_lambda[i], sigma, dv, num_v_steps))*dv
-      } else {
-        stop("Unknown method specified.")
-      }
-    }
-
-    P_vec <- P_vec*N1
-
+    LL <- num_ids*log(epsilon)
     tryCatch(
       {
+        v_het_vec <- rep(0, num_ids)
+        P_vec <- rep(0, num_sample_points)
+        N1 <- rep(0, num_sample_points)
+        for (i in 1:num_sample_points) {
+          uv <- UV_fn(uc, sample_lambda[i], rr, sigma)
+          P_vec[i] <- P_lambda(sample_lambda[i], r, alpha)
+          if (method == "FEM") {
+            v_het_vec <- v_het_vec + L_PDE_FEM_vec(training_Data, v0, uv, sample_lambda[i], sigma, dt, dv, num_v_steps)*P_vec[i]
+            N1[i] <- sum(Initialize_FEM(v0, uv, sample_lambda[i], sigma, dv, num_v_steps))*dv
+          } else if (method == "FDM") {
+            v_het_vec <- v_het_vec + L_PDE_FDM_vec(training_Data, v0, uv, sample_lambda[i], sigma, dt, dv, num_v_steps)*P_vec[i]
+            N1[i] <- sum(Initialize_FDM(v0, uv, sample_lambda[i], sigma, dv, num_v_steps))*dv
+          } else {
+            stop("Unknown method specified.")
+          }
+        }
+
+        P_vec <- P_vec*N1
+
         if (sum(P_vec) > 0) {
           v_het_vec <- v_het_vec/sum(P_vec)
         }
@@ -698,7 +700,7 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
     return(-LL)
   }
 
-  fit <- bbmle::mle2(nLL_PDE_het, start=C0, lower=c(-5, -10, 1e-100, 0.1), upper=c(3,0,2,50))
+  fit <- bbmle::mle2(nLL_PDE_het, start=C0, lower=Clow, upper=Chigh)
 
   C[3] <- c_From_uc(C[3], rr, sigma)
   C <- as.numeric(fit@coef)
@@ -717,6 +719,7 @@ Estimate_Parameters_PDE <- function(training_Data, C0=list(v0=0.6973,uc=-2.8896,
 #
 
 Estimate_Parameters <- function(training_Data, C0=list(v0=1.5,uc=-3, r=0.1,alpha=20),
+                                Clow=c(-10, -20, 1e-100, 0.1), Chigh=c(5,1,10,100),
                                 NN=100, sigma=1, rr=1, dt=1, Replicate=TRUE,
                                 num_sample_points=200, min_sample_v=0, max_sample_v=15, min_sample_lambda=0, max_sample_lambda=1) {
 
@@ -773,11 +776,41 @@ Estimate_Parameters <- function(training_Data, C0=list(v0=1.5,uc=-3, r=0.1,alpha
 }
 
 ################################################################################
+#
+# Make prediction for testing_period based on the estimated parameters C and the observed_Data
+# C       = estimated parameters
+# observed_Data = list of the observed (x,t1,t2,...,tx,T), or (x,t1,t2,...,tx,Tm,T) for each individual customers.
+#                 where Tm is the 'membership' period (observation information tracking period). If Tm is not given, then we assume information tracking is not observable).
+#
 
 Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, rr=1, dt=1, Replicate=TRUE,
                             num_sample_points=200, min_sample_v=0, max_sample_v=15, min_sample_lambda=0, max_sample_lambda=1, Use_Stored_Sampled_Points) {
 
-  returned_df <- Prepare_Simulation(training_Data, NN, sigma, rr, dt, Replicate, testing_period)
+  num_ids <- length(observed_Data)
+  dead_vec <- rep(1, num_ids)
+  rep_txn_vec <- rep(0, num_ids)
+  for (i in 1:num_ids) {
+    xi <- observed_Data[[i]][1]
+    rep_txn_vec[i] <- length(unique(observed_Data[[i]][2:(xi+1)]))-1
+  }
+  if (length(observed_Data[[1]]) > observed_Data[[1]][1]+2) {
+    # Membership data case...
+    for (i in 1:num_ids) {
+      xi <- observed_Data[[i]][1]
+      tti <- observed_Data[[i]][2:(xi+1)]
+      TTmi <- observed_Data[[i]][xi+2]
+      TTi <- observed_Data[[i]][xi+3]
+      if (TTmi <= TTi) {
+        dead_vec[i] <- 0
+        observed_Data[[i]] <- c(xi, tti, TTi)
+      } else {
+        # All we know is that the consumer survives until the end of the observed period => equivalently, the consumer made a 'virtual' purchase at Ti.
+        observed_Data[[i]] <- c(xi+1, tti, TTi, TTi)
+      }
+    }
+  }
+
+  returned_df <- Prepare_Simulation(observed_Data, NN, sigma, rr, dt, Replicate, testing_period)
 
   if(missing(Use_Stored_Sampled_Points)){
     Use_Stored_Sampled_Points <- file.exists(file_sample_v_lambda)
@@ -786,7 +819,7 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
     sampled <- read.csv(file_sample_v_lambda)
     sample_v <- sampled$sample_v
     sample_lambda <- sampled$sample_lambda
-    num_sample_points <- length(sampled)
+    num_sample_points <- length(sample_v)
   } else {
     sample_v <- runif(num_sample_points, min=min_sample_v, max=max_sample_v)
     sample_lambda <- runif(num_sample_points, min=min_sample_lambda, max=max_sample_lambda)
@@ -807,7 +840,7 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
 
   L_B_df_ <- list()
   for (i in 1:num_sample_points) {
-    L_B_df_[[i]] <- L_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(training_Data), NN)
+    L_B_df_[[i]] <- L_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(observed_Data), NN)
     setTxtProgressBar(pb, i)
   }
   print("Finish")
@@ -843,16 +876,16 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
                        char = "█")   # Character used to create the bar
 
   for (i in 1:num_sample_points) {
-    predict_rep_txn_B <- predict_rep_txn_B + PXt_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(training_Data), NN)*P_vec[i]
-    EXt_B_het_vec <- EXt_B_het_vec + EXt_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(training_Data), NN)*P_pos_df[,i]
+    predict_rep_txn_B <- predict_rep_txn_B + PXt_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(observed_Data), NN)*P_vec[i]
+    EXt_B_het_vec <- EXt_B_het_vec + EXt_B(sample_v[i], sample_uv[i], sample_lambda[i], dt, returned_df, length(observed_Data), NN)*P_pos_df[,i]
     setTxtProgressBar(pb, i)
   }
   print("Finish")
   predict_rep_txn_B <- predict_rep_txn_B/sum(P_vec)
-  EXt_B_het_vec <- EXt_B_het_vec/apply(P_pos_df, MARGIN=1, sum)
+  EXt_B_het_vec <- dead_vec*EXt_B_het_vec/apply(P_pos_df, MARGIN=1, sum)
 
   for (i in 1:num_ids) {
-    rep_txn <- length(unique(id_training_Data[[i]]$day))-1
+    rep_txn <- rep_txn_vec[i]
     if (rep_txn > 7) {
       rep_txn <- 7
     }
@@ -875,9 +908,12 @@ for (i in 1:num_ids) {
   TT <- tail(training_Data[[i]],1)
   tx <- tail(training_Data[[i]],2)[1]
   if (test_period_txns[i] == 0) {
-    tau <- tx + 2*runif(1)*(TT-tx)
+    tau <- tx + runif(1)*(TT-tx)
   } else {
     tau <- TT + 1
   }
   training_Data_[[i]] <- c(training_Data[[i]][1:(x+1)], tau, TT)
 }
+
+epsilon <- 1e-10
+Estimate_Parameters_PDE(training_Data_, C0 <- list(v0=C[1], uc=C[2], r=C[3], alpha=C[4]), num_sample_points=20,  Clow=c(-5, C[2]-epsilon, 0, 0.1), Chigh=c(3,C[2]+epsilon,2,50))
