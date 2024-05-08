@@ -48,6 +48,92 @@ run_demo <- function() {
 
   # Compute MAE:
   MAE <- sum(abs(test_period_txns - EXt_B_het_vec))/num_ids
+
+  print(paste("The MAE is", MAE, collapse=" "))
+}
+
+CDNOW_data_augmentation <- function() {
+  Data <- read.table(paste(getwd(),'/CDNOW_sample.txt',sep=''), header=FALSE, sep="")
+  names(Data) <- c("master_id", "id", "day", "amount", "dollar_amount")
+  Data$day <- as.Date(as.character(Data$day), "%Y%m%d")
+  Data$day <- as.numeric(Data$day - min(Data$day))/7
+
+  # Get the number of consumers.
+  num_ids <- length(unique(Data[,2]))
+
+  # In the following we prepare the data by separating them into training (calibration period) and testing set.
+  Data_ <- data.frame(matrix(ncol = ncol(Data), nrow = 0))
+  names(Data_) <- names(Data)
+
+  all_ids_Data_ <- list()
+  for(i in 1:num_ids){
+    id_Data <- Data[Data$id == i,]
+
+    start_date <- id_Data$day[1]
+    tx <- tail(id_Data$day, 1) - start_date
+
+    # Let's suppose that a consumer i ends her membership some time randomly after her last observed transaction.
+    # Note that this is just one possible way to synthesize tau, there is no one unique way.
+    tau <- start_date + tx + 2*runif(1)*(tx/length(id_Data$day)+1)
+
+    id_Data[nrow(id_Data)+1, ] <- c(id_Data$master_id[1], i, tau, 0, 0)
+    all_ids_Data_[[i]] <- id_Data
+  }
+  Data_ <- dplyr::bind_rows(all_ids_Data_)
+  row.names(Data_) <- NULL
+
+  write.table(Data_, file="CDNOW_membership_aug.txt", row.names=FALSE, sep=",")
+}
+
+run_demo_membership <- function() {
+  Data <- read.table(paste(getwd(),'/CDNOW_membership_aug.txt',sep=''), header=TRUE, sep=",")
+
+  # Get the number of consumers.
+  num_ids <- length(unique(Data[,2]))
+
+  # 39 weeks calibration time period
+  train_period <- 39
+  # length of test period
+  test_period <- 39
+
+  # TTT vector stores the amount of time for each consumer from joining the firm to the end of 39 weeks calibration period.
+  TTT <- c()
+
+  # In the following we prepare the data by separating them into training (calibration period) and testing set.
+  training_Data_ = list()
+  test_period_txns <- c()
+  for(i in 1:num_ids){
+    id_Data <- Data[Data$id == i,]
+
+    tau <- tail(id_Data$day, 1)
+    id_Data <- id_Data[1:(nrow(id_Data)-1),]
+
+    start_date <- id_Data$day[1]
+    id_Data$day <- id_Data$day - start_date
+    TTT[i] <- train_period - start_date
+    training_Data_[[i]] <- c(length(id_Data[id_Data$day < TTT[i],]$day), id_Data[id_Data$day < TTT[i],]$day, tau, TTT[i])
+
+    test_period_txns[i] <- length(unique(id_Data[id_Data$day >= TTT[i],]$day))
+  }
+
+  C <- c(0.6973, -2.8896, 0.3922, 19.8473) # Let the initial starting point be the estimated parameters from the non-membership CDNOW data.
+  # We will also assume in the membership version of CDNOW that the membership fees is $4.5 per annum => uc = -2.8896
+  C_ <- Estimate_Parameters_PDE(training_Data_, C0 <- list(v0=C[1], uc=C[2], r=C[3], alpha=C[4]), num_sample_points=20,  Clow=c(-5, C[2]-1e-10, 0, 0.1), Chigh=c(3,C[2]+1e-10,2,50))
+  res_ <- Make_Prediction(C_, observed_Data=training_Data_, testing_period=39, Use_Stored_Sampled_Points=FALSE)
+
+  prediction_B <- res_[[1]]
+  EXt_B_het_vec <- res_[[2]]
+
+  for (i in 1:(length(prediction_B)-1)) {
+    print(paste("The expected transactions in test period given", i-1, "observed transactions is", prediction_B[i], collapse=" "))
+  }
+  print(paste("The expected transactions in test period given", length(prediction_B)-1, "or more observed transactions is",
+              prediction_B[length(prediction_B)], collapse=" "))
+
+  # Compute MAE:
+  MAE_ <- sum(abs(test_period_txns - EXt_B_het_vec))/num_ids
+
+  print(paste("The MAE is", MAE_, collapse=" "))
 }
 
 ################################################################################
@@ -900,20 +986,3 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
 
   return(list(prediction_B, EXt_B_het_vec, predict_rep_txn_B, rep_txn_count))
 }
-
-
-training_Data_ = list()
-for (i in 1:num_ids) {
-  x <- training_Data[[i]][1]
-  TT <- tail(training_Data[[i]],1)
-  tx <- tail(training_Data[[i]],2)[1]
-  if (test_period_txns[i] == 0) {
-    tau <- tx + runif(1)*(TT-tx)
-  } else {
-    tau <- TT + 1
-  }
-  training_Data_[[i]] <- c(training_Data[[i]][1:(x+1)], tau, TT)
-}
-
-epsilon <- 1e-10
-Estimate_Parameters_PDE(training_Data_, C0 <- list(v0=C[1], uc=C[2], r=C[3], alpha=C[4]), num_sample_points=20,  Clow=c(-5, C[2]-epsilon, 0, 0.1), Chigh=c(3,C[2]+epsilon,2,50))
