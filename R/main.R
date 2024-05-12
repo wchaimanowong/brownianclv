@@ -1,3 +1,4 @@
+# source("C:/Users/Wee/Documents/R/brownianclv/R/brownian_v5.R")
 ################################################################################
 # Run demo using CDNOW_sample
 
@@ -986,3 +987,4 @@ Make_Prediction <- function(C, observed_Data, testing_period, NN=100, sigma=1, r
 
   return(list(prediction_B, EXt_B_het_vec, predict_rep_txn_B, rep_txn_count))
 }
+
