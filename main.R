@@ -91,11 +91,7 @@ run_demo <- function(run_estimation=TRUE) {
 
 run_demo_noncontractual <- function(run_estimation=TRUE) {
 
-  Data <- read.table(paste(getwd(),'/CDNOW_sample.txt',sep=''), header=FALSE, sep="")
-  names(Data) <- c("master_id", "id", "day", "amount", "dollar_amount")
-  Data$day <- as.Date(as.character(Data$day), "%Y%m%d")
-  Data$day <- as.numeric(Data$day - min(Data$day))/7
-
+  Data <- read.table(paste(getwd(),'/CDNOW_sample.txt',sep=''), header=TRUE, sep=",")
   # Get the number of consumers.
   num_ids <- length(unique(Data[,2]))
 
@@ -108,8 +104,9 @@ run_demo_noncontractual <- function(run_estimation=TRUE) {
   TTT <- c()
 
   # In the following we prepare the data by separating them into training (calibration period) and testing set.
-  training_Data = list()
+  training_Data <- list()
   test_period_txns <- c()
+
   for(i in 1:num_ids){
     id_Data <- Data[Data$id == i,]
 
@@ -128,6 +125,7 @@ run_demo_noncontractual <- function(run_estimation=TRUE) {
     C <- Estimate_Parameters_PDE(training_Data, C0=list(v0=0.1,uc=-3, r=0.8,alpha=8), num_sample_points=100, observe_tau=FALSE)
   } else {
     C <- c(0.174182301150983, -2.61471226189415, 0.889411482884871, 8.07522727474511)
+    #C <- c(0.172530740030195, -2.61255864317189, 0.892320672398463, 8.08388487836263)
     print("Skipping Estimation. Use the known estimated result for evaluation...")
   }
 
